@@ -35,6 +35,7 @@ extern "C" {
 #include "stdint.h"                    // porque uso: uint8_t, int16_t, uint32_t
 #include <string.h>                    // para criar uma string de msgs
 #include <stdlib.h>                    // porque vou usar rand()
+#include <stdio.h>
 #include "funcoes_SPI_display.h"       // funções de display 7-segm e conversores
 #include "cmsis_os.h"
 /* USER CODE END Includes */
@@ -102,6 +103,8 @@ void Error_Handler(void);
 #define DT_NEWREQ 90-1         // DT = ~90ms p/ nova requisição de dado
 #define DT_ADC 500-1           // def samples/seg (2s/s = 500ms delay)
 #define DT_CRONO 100-1         // dt = 99 ms (== 100 e ajusta crono, reset p/ 00)
+#define DT_PING 250-1		   // DT = 250 ms -> Dispara 4 vz/s
+#define DT_Inicial 3000-1
 #define DT_DISPLAY_MD1 4000-1  // modo 1 muda display a cada 4000 ms
 #define DT_DISPLAY_MD2 2000-1  // modo 2 muda display a cada 2000 ms
 #define DT_LEDS 200-1          // intervalo tempo para piscar leds e buzzer
@@ -117,9 +120,9 @@ void Error_Handler(void);
 // vals enumerados dos SINAIS emitidos pelos botões
 enum {A1_FALL, A1_DOWN, A1_UP, A2_FALL, A2_DOWN, A2_UP, A3_FALL, A3_DOWN, A3_UP, NO_BOT};
 // valores enumerados dos sinais/msgs a serem ENVIADAS
-enum {sndNADA, sndCRN, sndADC, sndREQCRN, sndREQADC, sndREQSRV, sndREQOFF, sndMSGNSV};
+enum {sndNADA, sndCRN, sndADC, sndREQCRN, sndREQADC, sndREQSRV, sndREQOFF, sndPNGOK, sndMSGNSV};
 // valores enumerados dos sinais/msgs que foram RECEBIDAS
-enum {rcvNADA, rcvCRN, rcvADC, rcvREQCRN, rcvREQADC, rcvREQSRV, rcvREQOFF, rcvMSGNSV};
+enum {rcvNADA, rcvCRN, rcvADC, rcvREQCRN, rcvREQADC, rcvREQSRV, rcvREQOFF, rcvPNGREQ, rcvMSGNSV};
 
 // @definições para teste de uma função minha, vcs não vão utilizar...
 //#define GPIOA_IDR *((uint32_t *)0x40010C08ul) // end. reg GPIOB Input Data
