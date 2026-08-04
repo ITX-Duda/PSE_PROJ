@@ -110,6 +110,7 @@ int timerBotao = 0;
 // os vetores abaixo tem idx[0] = digito menos significativo no display
 volatile uint8_t pingOK = 0;
 volatile uint16_t tempoSemResposta = 0;
+int8_t apertouA1 = 0;
 int8_t estado = 0;
 int8_t estaServ = 0;
 int8_t erroDisplay[] = {0xE,0xE,0xE,0xE} //para erro (como escreve ncon em HEX?)
@@ -526,7 +527,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	      // se veio "rqadc", o cliente solicitou o dado do ADC
 		  oQueEnv = sndADC;
 	  } else if (BufIN[2] == 'c') {
-	      // se veio "rqadc", o cliente solicitou o dado do CRONO
+	      // se veio "rqcrn", o cliente solicitou o dado do CRONO
 		  oQueEnv = sndCRN;
 	  } else if (BufIN[2] == 's') {
 	      // se veio "rqsrv" esta' solicitando p/ placa ATUAR como Server
@@ -534,6 +535,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	  } else if (BufIN[2] == 'o') {
 	      // se veio "rqoff" esta' solicitando PARAR de atuar como Server
 		  oQueEnv = rcvREQOFF;
+		  //Volta para o modo de amostragem local
+
       }
       	  // tem mais itens nesse IF!!!
 	  }
@@ -580,11 +583,16 @@ void checaBotao(void *argument)
 	  if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET){
 		  timerBotao = DT_DISPLAY_MD2;
 		  estado = 1;
+		  apertouA1== 1;
+
 	  } else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET){
 		  STR_BUFF(REQSRV);
+		  estaServ = 1;
 		  estado = 3;
 	  } else if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET){
-		 //
+		 //Deixa de solicitar serviço
+		 STR_BUFF(REQOFF);
+
 	  }
 
     osDelay(1);
@@ -629,7 +637,8 @@ void UART_TX(void *argument)
 		  if (oQueEnv == rcvPNGREQ){
 			  STR_BUFF(PNGRSP);
 		  } else if (oQueEnv == rcvREQSRV){
-			  STR_BUFF(REQCRN);
+			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+		//	  STR_BUFF(REQCRN);
 		  } else if (oQueEnv == sndCRN){
 			  BufOUT[0] = 'c';
 			  BufOUT[1] = Crono[0];
@@ -645,7 +654,12 @@ void UART_TX(void *argument)
 			  BufOUT[3] = ValAdc[2];
 			  BufOUT[4] = ValAdc[3];
 		  } else if (oQueEnv == rcvREQOFF){
-			  //
+			  if(apertouA1 == 1){
+				  estado = 1;
+			  }
+			  if(apertouA1 == 0){
+				  estado = 0;
+			  }
 		  }
 		  if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET){
 			  STR_BUFF(REQOFF);
