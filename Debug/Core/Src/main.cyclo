@@ -1,0 +1,17 @@
+../Core/Src/main.c:149:5:main	1
+../Core/Src/main.c:264:6:SystemClock_Config	4
+../Core/Src/main.c:310:13:MX_NVIC_Init	1
+../Core/Src/main.c:334:13:MX_ADC1_Init	3
+../Core/Src/main.c:381:13:MX_USART1_UART_Init	2
+../Core/Src/main.c:412:13:MX_DMA_Init	1
+../Core/Src/main.c:433:13:MX_GPIO_Init	1
+../Core/Src/main.c:473:6:HAL_ADC_ConvCpltCallback	2
+../Core/Src/main.c:494:6:HAL_UART_RxCpltCallback	10
+../Core/Src/main.c:547:6:StartDefaultTask	1
+../Core/Src/main.c:568:6:checaBotao	3
+../Core/Src/main.c:596:6:mostraDisplay	1
+../Core/Src/main.c:614:6:UART_TX	8
+../Core/Src/main.c:660:6:UART_RX	1
+../Core/Src/main.c:678:6:stateMachine	12
+../Core/Src/main.c:742:6:HAL_TIM_PeriodElapsedCallback	24
+../Core/Src/main.c:853:6:Error_Handler	1
