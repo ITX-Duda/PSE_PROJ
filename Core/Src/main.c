@@ -50,6 +50,8 @@
 ADC_HandleTypeDef hadc1;
 
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_rx;
+DMA_HandleTypeDef hdma_usart1_tx;
 
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -102,18 +104,25 @@ int8_t DspHex[]  = {0x10,0x10,0x10,0x10};  // vetor val display (se=16 => off)
 size_t sizeBuffs = sizeof(BufOUT);     // tamanho dos buffers - usa geral
 // qual dig liga pto? (ex: 0xA=>1010=> 1000=MSD + 0010=DG2)
 uint8_t ptoDec = 0;
+uint8_t oQueEnv = 0;
+int timerBotao = 0;
 
 // os vetores abaixo tem idx[0] = digito menos significativo no display
+int8_t estado = 0;
+int8_t estaServ = 0;
 int8_t modoBotao = 0;
+int8_t testeDisplay[] = {8,8,8,8};
 int8_t Crono[] = {0,0,0,0};            // vetor com vals decimais do cronometro
 int8_t ValAdc[] = {0,0,0,0};           // vetor com vals decimais do ADC
 int8_t ExCrono[] = {0,0,0,0};          // vetor com vals decimais do cronometro
 int8_t ExValAdc[] = {0,0,0,0};         // vetor com vals decimais do ADC
+size_t sizeVals = sizeof(Crono);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_USART1_UART_Init(void);
 void StartDefaultTask(void *argument);
@@ -162,6 +171,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC1_Init();
   MX_USART1_UART_Init();
 
@@ -230,19 +240,19 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
-	  if(HAL_UART_GetState(&huart1) == !HAL_UART_STATE_BUSY_TX){
-		  //O que tenho que mandar?
-		  //Criar uma queue para armazenar o dado do ADC e Crono.
-		  //Quando a UART estiver livre, checar se a queue está vazia, se não, enviar o conteúdo para o BuffOUT.
-		  if(oQueEnv == 5){
-			  //Se tiver que mandar req serv:
-			  STR_BUFF(REQSRV); //A macro passa a str "rqsrv" para o bufOUT
-			  HAL_UART_Transmit_DMA(&huart1, bufOUT, sizeBuffs);
-			  //Consuma a var que tinha indicação para env serv:
-			  //oQueEnv = 0;
-		  }
-	  }
+//
+//	  if(HAL_UART_GetState(&huart1) == !HAL_UART_STATE_BUSY_TX){
+//		  //O que tenho que mandar?
+//		  //Criar uma queue para armazenar o dado do ADC e Crono.
+//		  //Quando a UART estiver livre, checar se a queue está vazia, se não, enviar o conteúdo para o BuffOUT.
+//		  if(oQueEnv == 5){
+//			  //Se tiver que mandar req serv:
+//			  STR_BUFF(REQSRV); //A macro passa a str "rqsrv" para o bufOUT
+//			  HAL_UART_Transmit_DMA(&huart1, bufOUT, sizeBuffs);
+//			  //Consuma a var que tinha indicação para env serv:
+//			  //oQueEnv = 0;
+//		  }
+//	  }
   }
   /* USER CODE END 3 */
 }
@@ -397,6 +407,25 @@ static void MX_USART1_UART_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
+  /* DMA1_Channel5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -416,7 +445,8 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_6|GPIO_PIN_9, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15
+                          |GPIO_PIN_5, GPIO_PIN_SET);
 
   /*Configure GPIO pins : PA1 PA2 PA3 */
   GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3;
@@ -425,9 +455,9 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB10 PB12 PB13 PB14
-                           PB15 PB6 PB9 */
+                           PB15 PB5 PB6 PB9 */
   GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14
-                          |GPIO_PIN_15|GPIO_PIN_6|GPIO_PIN_9;
+                          |GPIO_PIN_15|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -463,27 +493,43 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 // 4 = reqADC  5 = reqSRV      6 = REQOFF      7 = MSGDND
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  uint8_t val = rcvNADA;               // código de qual pacote chegou
+  oQueEnv = rcvNADA;               // código de qual pacote chegou
   // o que veio na UART1?
   if (huart->Instance == USART1) {
-                     //se veio um valor iniciado com 'txxxx", veio o valor do Crono
-	  if (BufIN[0] == 'a') {
-	    // o que vc vai fazer aqui?
-	    // se veio um valor iniciado com 'axxxx", veio o valor do ADC
+	  if (BufIN[4] == '?') {
+		  // se veio "oper?", enviar ping para verificar estado da operação
+		  oQueEnv  = rcvPNGREQ;
+	  } else if (BufIN[4] == '!'){
+		  // resposta de ping "oper!", sistema operando
+		  oQueEnv = sndPNGOK;
+	  } else if (BufIN[0] == 'a') {
+	      // se veio um valor iniciado com 'axxxx", veio o valor do ADC
+		  ExValAdc[0] = BufIN[1];
+		  ExValAdc[1] = BufIN[2];
+		  ExValAdc[2] = BufIN[3];
+		  ExValAdc[3] = BufIN[4];
+		  oQueEnv = rcvADC;
 	  } else if (BufIN[0] == 'c') {
-	    // o que vc vai fazer aqui?
-            // se veio um valor iniciado com 'cxxxx", veio o valor do CRONO
+          // se veio um valor iniciado com 'cxxxx", veio o valor do CRONO
+		  ExCrono[0] = BufIN[1];
+		  ExCrono[1] = BufIN[2];
+		  ExCrono[2] = BufIN[3];
+		  ExCrono[3] = BufIN[4];
+		  oQueEnv = rcvCRN;
 	  } else if (BufIN[2] == 'a') {
-	    // o que vc vai fazer aqui?
-	    // se veio "rqadc", o cliente solicitou o dado do ADC
+	      // se veio "rqadc", o cliente solicitou o dado do ADC
+		  oQueEnv = sndADC;
+	  } else if (BufIN[2] == 'c') {
+	      // se veio "rqadc", o cliente solicitou o dado do CRONO
+		  oQueEnv = sndCRN;
 	  } else if (BufIN[2] == 's') {
-	    // o que vc vai fazer aqui?
-	   // se veio "rqsrv" esta' solicitando p/ placa ATUAR como Server
+	      // se veio "rqsrv" esta' solicitando p/ placa ATUAR como Server
+		  oQueEnv = rcvREQSRV;
 	  } else if (BufIN[2] == 'o') {
-	    // o que vc vai fazer aqui?
-	    // se veio "rqoff" esta' solicitando PARAR de atuar como Server
-            } 
-            // tem mais itens nesse IF!!!
+	      // se veio "rqoff" esta' solicitando PARAR de atuar como Server
+		  oQueEnv = rcvREQOFF;
+      }
+      	  // tem mais itens nesse IF!!!
 	  }
 	  // redispara a UART para receber dados novamente pelo DMA controller
 	  HAL_UART_Receive_DMA(&huart1, BufIN, sizeBuffs);
@@ -510,7 +556,7 @@ void StartDefaultTask(void *argument)
 }
 // ... aqui vai entrar outros códigos das Tasks que você definiu
   /* USER CODE END 5 */
-}
+
 
 /* USER CODE BEGIN Header_checaBotao */
 /**
@@ -526,15 +572,15 @@ void checaBotao(void *argument)
   for(;;)
   {
 	  if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET){
-		  modoBotao = 1;
-	  	} else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET){
-	  		modoBotao = 2;
-	  	} else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET){
-	  		Crono[0] = 0;
-	  		Crono[1] = 0;
-	  		Crono[2] = 0;
-	  		Crono[3] = 0;
-	  	}
+		  timerBotao = DT_DISPLAY_MD2;
+		  estado = 1;
+	  } else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET){
+		  STR_BUFF(REQSRV);
+		  estado = 3;
+	  } else if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET){
+		 //
+	  }
+
     osDelay(1);
   }
   /* USER CODE END checaBotao */
@@ -553,11 +599,6 @@ void mostraDisplay(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  if(modoBotao == 1){
-	  		  mostrar_no_display(Crono, 10);
-	  	  } else if (modoBotao == 2){
-	  		  mostrar_no_display(ValAdc, 8);
-	  	  }
     osDelay(1);
   }
   /* USER CODE END mostraDisplay */
@@ -574,26 +615,40 @@ void UART_TX(void *argument)
 {
   /* USER CODE BEGIN UART_TX */
   /* Infinite loop */
-  int8_t queueEnv = {0, 0, 0, 0};
 
   for(;;)
   {
-	  if(HAL_UART_GetState(&huart1) == !HAL_UART_STATE_BUSY_TX){
-		  //O que tenho que mandar?
-		  //Criar uma queue para armazenar o dado do ADC e Crono.
-		  //Quando a UART estiver livre, checar se a queue está vazia, se não, enviar o conteúdo para o BuffOUT.
-
-		  if(oQueEnv == 5){
-			  //Se tiver que mandar req serv:
-			  STR_BUFF(REQSRV); //A macro passa a str "rqsrv" para o bufOUT
-			  HAL_UART_Transmit_DMA(&huart1, bufOUT, sizeBuffs);
-			  //Consuma a var que tinha indicação para env serv:
-			  //oQueEnv = 0;
+	  if(HAL_UART_GetState(&huart1) != HAL_UART_STATE_BUSY_TX){
+		  STR_BUFF(PNGPRG);
+		  if (oQueEnv == rcvPNGREQ){
+			  STR_BUFF(PNGRSP);
+		  } else if (oQueEnv == rcvREQSRV){
+			  STR_BUFF(REQCRN);
+		  } else if (oQueEnv == sndCRN){
+			  BufOUT[0] = 'c';
+			  BufOUT[1] = Crono[0];
+			  BufOUT[2] = Crono[1];
+			  BufOUT[3] = Crono[2];
+			  BufOUT[4] = Crono[3];
+		  } else if (oQueEnv == rcvCRN){
+			  STR_BUFF(REQADC);
+		  } else if (oQueEnv == sndADC){
+			  BufOUT[0] = 'a';
+			  BufOUT[1] = ValAdc[0];
+			  BufOUT[2] = ValAdc[1];
+			  BufOUT[3] = ValAdc[2];
+			  BufOUT[4] = ValAdc[3];
+		  } else if (oQueEnv == rcvREQOFF){
+			  //
 		  }
-    osDelay(1);
-  }
+		  if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET){
+			  STR_BUFF(REQOFF);
+		  }
+	  }
+	  HAL_UART_Transmit_DMA(&huart1, BufOUT, sizeBuffs);
+    }
+ }
   /* USER CODE END UART_TX */
-}
 
 /* USER CODE BEGIN Header_UART_RX */
 /**
@@ -608,7 +663,7 @@ void UART_RX(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+	  HAL_UART_Receive_DMA(&huart1, BufIN, sizeBuffs);
   }
   /* USER CODE END UART_RX */
 }
@@ -626,7 +681,52 @@ void stateMachine(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+	  switch(estado){
+	  case 0:
+		  //Estado 0 - teste dos LEDs do display
+		  mostrar_no_display(testeDisplay, 15);
+		  break;
+	  case 1:
+		  //Estado 1 - exibe o cronometro no display
+		  mostrar_no_display(Crono, 10);
+	      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
+	      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
+	      break;
+	  case 2:
+		  //Estado 2 - exibe o conversor ADC no display
+		  mostrar_no_display(ValAdc, 8);
+	      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
+	      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
+	      break;
+	  case 3:
+		  //Estado 3 - cronometro 2 seg
+		  mostrar_no_display(Crono, 10);
+		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);
+		  if(Crono[0]%2 == 0){
+			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
+		  } break;
+	  case 4:
+		  //Estado 4 - ADC 2 seg
+		  mostrar_no_display(ValAdc, 8);
+		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+		  if(Crono[0]%2 == 0){
+			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
+		  } break;
+	  case 5:
+	  	  //Estado 3 - cronometro externo
+	  	  mostrar_no_display(ExCrono, 10);
+		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
+		  if(Crono[0]%2 == 0){
+			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
+		  } break;
+	  case 6:
+	  	  //Estado 4 - ADC externo
+	  	  mostrar_no_display(ExValAdc, 8);
+		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
+		  if(Crono[0]%2 == 0){
+			  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+		  } break;
+	  }
   }
   /* USER CODE END stateMachine */
 }
@@ -642,9 +742,10 @@ void stateMachine(void *argument)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
+	  uint16_t static contaModo = 0;
       uint16_t static contaCRN = 0;      // conta num vezes até DT-CRONO
       uint16_t static contaADC = 0;      // conta num vezes até DT-CRONO
-
+      uint16_t static contaPing = 0;     // conta num vezes até DT-CRONO
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM4)
   {
@@ -683,6 +784,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 						if (Crono[3] < 0 ){// se < 0
 							Crono[3] = 9;  // volta p/ 9
             }  }  }  }
+
 		}
 	} else { ++contaCRN; }               // se nao muda crono, so' inc contaCRN
 
@@ -692,6 +794,55 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		HAL_ADC_Start_IT(&hadc1);          // dispara ADC p/ conversão por IRQ
 	} else { ++contaADC; }               // se nao muda crono, so' inc contaADC
 
+	if(contaPing >= DT_PING){
+		contaPing = 0;
+	} else { ++contaPing; }
+
+	++contaModo;
+	switch(estado){
+	case 0:
+		//Ao iniciar, mostra todos os LEDs do shield por 3 segundos
+		//Se A2	for selecionado antes de A1, todos os LEDs do shield são mostrados continuamente
+		if(contaModo >= DT_Inicial && modoBotao != 2){
+			contaModo = 0;
+		} break;
+	case 1:
+		//Estado 1: Cronometro sendo mostrado por 4 segundos
+		if(contaModo >= DT_DISPLAY_MD1){
+			estado = 2;
+			contaModo = 0;
+		} break;
+	case 2:
+		//Estado 2: ADC sendo mostrado por 4 segundos
+		if(contaModo >= DT_DISPLAY_MD1){
+			estado = 1;
+			contaModo = 0;
+		} break;
+	case 3:
+		//Estado 3: Cronometro mostrado por 2 segundos após solicitação de serviço (ao apertar A2)
+		if(contaModo >= DT_DISPLAY_MD2){
+			estado = 4;
+			contaModo = 0;
+		} break;
+	case 4:
+		//Estado 4: ADC mostrado por 2 segundos após solicitação de serviço (ao apertar A2)
+		if(contaModo >= DT_DISPLAY_MD2){
+			estado = 5;
+			contaModo = 0;
+		} break;
+	case 5:
+		//Estado 5: Cronometro externo por 2 segundos
+		if(contaModo >= DT_DISPLAY_MD2){
+			estado = 6;
+			contaModo = 0;
+		} break;
+	case 6:
+		//Estado 5: ADC externo por 2 segundos
+		if(contaModo >= DT_DISPLAY_MD2){
+			estado = 3;
+			contaModo = 0;
+		} break;
+	}
   /* USER CODE END Callback 1 */
 }
 
