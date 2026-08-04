@@ -536,6 +536,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	      // se veio "rqoff" esta' solicitando PARAR de atuar como Server
 		  oQueEnv = rcvREQOFF;
 		  //Volta para o modo de amostragem local
+		  	  if (apertouA1 == 1){
+		         estado = 1;
+		  	  	 estarServ = 0; }
+		      else if (apertouA1 == 0)
+		         estado = 0;
+	  	  	  	 esServ = 0; }
+		 }
 
       }
       	  // tem mais itens nesse IF!!!
@@ -583,15 +590,15 @@ void checaBotao(void *argument)
 	  if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET){
 		  timerBotao = DT_DISPLAY_MD2;
 		  estado = 1;
-		  apertouA1== 1;
+		  apertouA1 = 1;
 
 	  } else if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET){
-		  STR_BUFF(REQSRV);
+		  oQueEnv = sndREQSRV;
 		  estaServ = 1;
 		  estado = 3;
 	  } else if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET){
 		 //Deixa de solicitar serviço
-		 STR_BUFF(REQOFF);
+		 oQueEnv = sndREQOFF;
 
 	  }
 
@@ -653,15 +660,7 @@ void UART_TX(void *argument)
 			  BufOUT[2] = ValAdc[1];
 			  BufOUT[3] = ValAdc[2];
 			  BufOUT[4] = ValAdc[3];
-		  } else if (oQueEnv == rcvREQOFF){
-			  if(apertouA1 == 1){
-				  estado = 1;
-			  }
-			  if(apertouA1 == 0){
-				  estado = 0;
-			  }
-		  }
-		  if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_RESET){
+		  } else if (oQueEnv == sndREQOFF){
 			  STR_BUFF(REQOFF);
 		  }
 	  }
