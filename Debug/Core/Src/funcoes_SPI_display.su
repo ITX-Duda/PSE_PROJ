@@ -1,6 +1,6 @@
 ../Core/Src/funcoes_SPI_display.c:22:10:conv_7_seg	24	static
-../Core/Src/funcoes_SPI_display.c:54:6:serializar	24	static
-../Core/Src/funcoes_SPI_display.c:76:9:conv_num_ASC	16	static
-../Core/Src/funcoes_SPI_display.c:85:8:conv_ASC_num	16	static
-../Core/Src/funcoes_SPI_display.c:95:6:mostrar_no_display	24	static
-../Core/Src/funcoes_SPI_display.c:148:6:reset_pinos_emula_SPI	8	static
+../Core/Src/funcoes_SPI_display.c:59:6:serializar	24	static
+../Core/Src/funcoes_SPI_display.c:81:9:conv_num_ASC	16	static
+../Core/Src/funcoes_SPI_display.c:90:8:conv_ASC_num	16	static
+../Core/Src/funcoes_SPI_display.c:100:6:mostrar_no_display	24	static
+../Core/Src/funcoes_SPI_display.c:153:6:reset_pinos_emula_SPI	8	static

@@ -28,7 +28,7 @@ uint16_t conv_7_seg(int8_t valHEX) {
     case 0x2: {sseg = 0xA400; break;}  // retorna val p/ 2
     case 0x3: {sseg = 0xB000; break;}  // retorna val p/ 3
     case 0x4: {sseg = 0x9900; break;}  // retorna val p/ 4
-    case 0x5: {sseg = 0x9200; break;}  // retorna val p/ 5
+    case 0x5: {sseg = 0x9200; break;}  // retorna val p/ 5 e S
     case 0x6: {sseg = 0x8200; break;}  // retorna val p/ 6
     case 0x7: {sseg = 0xF800; break;}  // retorna val p/ 7
     case 0x8: {sseg = 0x8000; break;}  // retorna val p/ 8
@@ -40,6 +40,11 @@ uint16_t conv_7_seg(int8_t valHEX) {
     case 0xE: {sseg = 0x8600; break;} // retorna val p/ E
     case 0xF: {sseg = 0x8E00; break;} // retorna val p/ F
     case 0x10: {sseg = 0xFF00; break;} // default = tudo desligado
+
+    case 0x11: { sseg = 0xAB00; break; } // n  16
+    case 0x13: { sseg = 0xA300; break; } // o  18
+    case 0x14: { sseg = 0xAF00; break; } // r  19
+
     default: {sseg = 0xBF00; break;} // ERRO retorna "-" (so' g ligado)
   }
   if (TIPO_DISPLAY == 0)             // 0 = ANODO COMUM sai como a tabela
