@@ -13,6 +13,9 @@
   * in the root directory of this software component.
   * If no LICENSE file comes with this software, it is provided AS-IS.
   *
+  * Grupo: Arthur Furuta, Erik Lima e Maria Eduarda Brito
+  * Projeto de PSE - Prof. João Ranhel
+  *
   * notas: J Ranhel - rev 2026.07
   * PA5 =1 na entrada do callBack do RxCpltCallback(), =0 na saída
   * PB7 =1 na entrada do PeriodElapsedCallback(), =0 ma saída
@@ -111,8 +114,8 @@ const osMutexAttr_t bufOutMutex_attributes = {
 /* USER CODE BEGIN PV */
 // variáveis que todos vamos usar: buffers de entrada/saída na comunicação
 // buffers para entrada e saida de dados via USART
-uint8_t BufOUT[] = {'0','0','0','0','0'};  // inicia buffer OUT com cars "0"
-uint8_t BufIN[]  = {'0','0','0','0','0'};  // inicia buffer IN com cars "0"
+uint8_t BufOUT[] = {'0','0','0','0','0'};  // inicia buffer OUT com  "0"
+uint8_t BufIN[]  = {'0','0','0','0','0'};  // inicia buffer IN com "0"
 int8_t DspHex[]  = {0x10,0x10,0x10,0x10};  // vetor val display (se=16 => off)
 size_t sizeBuffs = sizeof(BufOUT);     // tamanho dos buffers - usa geral
 // qual dig liga pto? (ex: 0xA=>1010=> 1000=MSD + 0010=DG2)
@@ -487,27 +490,25 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-// fn que atende ao callback da ISR do conversor ADC1
+// callback do ADC: lê o valor bruto e já monta os 4 dígitos do display
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
-  uint16_t val_adc = 0;                // define var para ler ADC
-  if(hadc->Instance == ADC1) {         // se veio ADC1
-    val_adc = HAL_ADC_GetValue(&hadc1);// capta valor adc
-    // converter o valor lido em valores hexa p/ display
+  uint16_t val_adc = 0;                // guarda o valor lido do ADC
+  if(hadc->Instance == ADC1) {         // só entra se for o ADC1
+    val_adc = HAL_ADC_GetValue(&hadc1);// pega o valor atual do conversor
     int miliVolt = val_adc*3300/4095;
     int uniADC = miliVolt/1000;
     int decADC = (miliVolt-(uniADC*1000))/100;
     int cnsADC = (miliVolt-(uniADC*1000)-(decADC*100))/10;
     int mlsADC = miliVolt-(uniADC*1000)-(decADC*100)-(cnsADC*10);
-    ValAdc[3] = uniADC;                // dig mais significativo
+    ValAdc[3] = uniADC;                // dígito mais significativo
     ValAdc[2] = decADC;
     ValAdc[1] = cnsADC;
-    ValAdc[0] = mlsADC;                // dig menos significativo
+    ValAdc[0] = mlsADC;                // dígito menos significativo
   }
 }
 
-// A ISR apenas copia o quadro DMA para a fila e rearma a recepção.  A
-// interpretação e qualquer alteração de estado ficam na task UART_RX.
+// ISR só joga o frame na fila e reativa o DMA pra receber o próximo pacote
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART1) {
         uart_frame_t frame;
@@ -515,7 +516,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
         (void)osMessageQueuePut(fila_uart_eventosHandle, &frame, 0, 0);
     }
 
-    // Reativa recepção DMA
+    // recomeça a recepção pra não perder o fluxo
     HAL_UART_Receive_DMA(&huart1, BufIN, sizeBuffs);
 }
 
@@ -534,7 +535,7 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  // essa é a task default - vai colocar algo nela?
+	  // essa é a task default - vai colocar algo nela? nope
     osDelay(1);
   }
   /* USER CODE END 5 */
@@ -548,6 +549,7 @@ void StartDefaultTask(void *argument)
 */
 /* USER CODE END Header_checaBotao */
 void checaBotao(void *argument) {
+    // guarda o estado anterior pra detectar borda de aperto com bounce
     uint8_t ultimo_a1 = 1, ultimo_a2 = 1, ultimo_a3 = 1;
     uint32_t delay_antirrebote = 0;
 
@@ -557,24 +559,17 @@ void checaBotao(void *argument) {
         uint8_t a3 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
 
         if(delay_antirrebote == 0) {
-            // A interação só é habilitada após a confirmação do PING.
-            // Botão A1 - (re)inicia o modo local 2v/4s (item b) e, se eu
-            // estiver atendendo o colega (recebi rqsrv), informa que não
-            // está mais disponível com 'msnos' - NÃO mexe no
-            // meu próprio display por conta de A2 (isso é feito só pelo
-            // colega que recebe o rqsrv - item c.1)
+            // só reage se a comunicação já foi validada
             if(link_ok && a1 == GPIO_PIN_RESET && ultimo_a1 == GPIO_PIN_SET) {
                 if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
                     if(atendendoColega) {
-                        // A placa que presta o serviço avisa o cliente com
-                        // "msnos"; o cliente então exibe 5Er e aciona buzzer.
+                        // se eu tava servindo, avisa que não vou mais
                         uint8_t mensagem = sndMSGNSV;
                         (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
                         atendendoColega = 0;
                     }
                     a1Pressed = 1;
-                    // só entra no ciclo local se não estiver, nesse momento,
-                    // mostrando erro de conexão (estado permanece até reset)
+                    // não entra no modo local se tá no erro de conexão
                     if(estado != ST_ERRO_CONEXAO) {
                         estado = ST_LOCAL_CRN;
                     }
@@ -583,17 +578,14 @@ void checaBotao(void *argument) {
                 delay_antirrebote = DT_DEBOUNCING;
             }
 
-            // Botão A2 - requisita que o COLEGA me exiba (envia rqsrv);
-            // meu próprio display não muda (item c, c.1)
+            // A2 pede serviço pro colega
             if(link_ok && a2 == GPIO_PIN_RESET && ultimo_a2 == GPIO_PIN_SET) {
                 uint8_t mensagem = sndREQSRV;
                 (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
                 delay_antirrebote = DT_DEBOUNCING;
             }
 
-            // Botão A3 - desiste de PEDIR o serviço do colega (envia rqoff);
-            // não libera o atendimento que EU presto a ele, se houver
-            // (item g, g.2)
+            // A3 cancela o pedido de serviço
             if(link_ok && a3 == GPIO_PIN_RESET && ultimo_a3 == GPIO_PIN_SET) {
                 uint8_t mensagem = sndREQOFF;
                 (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
@@ -619,11 +611,12 @@ void checaBotao(void *argument) {
 */
 /* USER CODE END Header_mostraDisplay */
 void mostraDisplay(void *argument) {
+    // copia o estado atual pra variar o display sem ler metade dos vetores no meio
     int8_t estado_local;
     int8_t ex_crono_local[4];
     int8_t ex_adc_local[4];
     uint32_t led_timer = 0;
-    uint8_t led_state = 0;
+    uint8_t led_estado = 0;
     static uint32_t timer_5er = 0;
     static uint8_t mostrando_5er = 0;
 
@@ -639,14 +632,14 @@ void mostraDisplay(void *argument) {
             memset(ex_adc_local, 0, sizeof(ex_adc_local));
         }
 
-        // Lógica de piscar LEDs (200ms ON/OFF)
+        // alterna o LED pra dar aquele pulso visível
         led_timer += DT_MUX_DISP;
         if(led_timer >= (DT_LEDS + 1)) {
             led_timer = 0;
-            led_state = !led_state;
+            led_estado = !led_estado;
         }
 
-        // ST_ERRO_SERVICO: "n5Er" + buzzer por 5s (item e.1)
+        // erro de serviço: mostra 5Er e deixa o buzzer gritando
         if(estado_local == ST_ERRO_SERVICO) {
             if(!mostrando_5er) {
                 mostrando_5er = 1;
@@ -654,16 +647,12 @@ void mostraDisplay(void *argument) {
             }
             timer_5er++;
             mostrar_no_display(nSer, 0);
-            // O enunciado pede pulso intermitente de 200 ms ON/OFF.
-            HAL_GPIO_WritePin(BUZZER_GPIO, BUZZER_PIN,
-                              led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+            HAL_GPIO_WritePin(BUZZER_GPIO, BUZZER_PIN, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
 
             if(timer_5er >= (DT_BUZZER_MS / DT_MUX_DISP)) {
                 mostrando_5er = 0;
-                HAL_GPIO_WritePin(BUZZER_GPIO, BUZZER_PIN, GPIO_PIN_SET); // desliga buzzer
+                HAL_GPIO_WritePin(BUZZER_GPIO, BUZZER_PIN, GPIO_PIN_SET);
                 if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
-                    // volto ao meu estado local de base (item e.1 é sempre
-                    // sobre o meu próprio display de requisitante)
                     estado = a1Pressed ? ST_LOCAL_CRN : ST_IDLE;
                     osMutexRelease(estadoMutexHandle);
                 }
@@ -672,7 +661,7 @@ void mostraDisplay(void *argument) {
             continue;
         }
 
-        // ST_ERRO_CONEXAO: "nCon", espera reset (item a.5)
+        // erro de conexão: mostra nCon e trava até reset
         if(estado_local == ST_ERRO_CONEXAO) {
             mostrar_no_display(nCon, 0);
             HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_SET);
@@ -681,44 +670,43 @@ void mostraDisplay(void *argument) {
             continue;
         }
 
-        // Display normal
+        // escolhe o que aparece no display e qual LED pega o pulso
         switch(estado_local) {
             case ST_TESTE:
-                mostrar_no_display(testeDisplay, 15);      // 8.8.8.8 (item a.3)
+                mostrar_no_display(testeDisplay, 15);
                 break;
             case ST_IDLE:
-                mostrar_no_display(testeDisplay, 15);      // 8.8.8.8 (item c.1)
+                mostrar_no_display(testeDisplay, 15);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
-            case ST_LOCAL_CRN:                             // item b.1
+            case ST_LOCAL_CRN:
                 mostrar_no_display(Crono, 10);
-                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
-            case ST_LOCAL_ADC:                             // item b.1
+            case ST_LOCAL_ADC:
                 mostrar_no_display(ValAdc, 8);
-                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
-            case ST_SERV_CRN:                              // item d, slot D1
-                // se ainda não apertei A1, mostro 8.8.8.8 no meu lugar (item d.1)
+            case ST_SERV_CRN:
                 mostrar_no_display(a1Pressed ? Crono : testeDisplay, a1Pressed ? 10 : 15);
-                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
-            case ST_SERV_ADC:                              // item d, slot D2
+            case ST_SERV_ADC:
                 mostrar_no_display(a1Pressed ? ValAdc : testeDisplay, a1Pressed ? 8 : 15);
-                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
-            case ST_SERV_EXCRN:                            // item d, slot D3 (PB13)
+            case ST_SERV_EXCRN:
                 mostrar_no_display(ex_crono_local, 10);
-                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
-            case ST_SERV_EXADC:                            // item d, slot D4 (PB12)
+            case ST_SERV_EXADC:
                 mostrar_no_display(ex_adc_local, 8);
-                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_13, GPIO_PIN_SET);
                 break;
         }
@@ -739,16 +727,16 @@ void UART_TX(void *argument) {
 
     for(;;) {
         if(osMessageQueueGet(fila_uart_txHandle, &mensagem, NULL, osWaitForever) == osOK) {
-            /* gState representa exclusivamente o transmissor; a recepção
-             * DMA contínua mantém o estado global como BUSY_RX. */
+            // espera a UART ficar livre pra não sobrescrever a tx
             while(huart1.gState != HAL_UART_STATE_READY) {
                 osDelay(1);
             }
             if(osMutexAcquire(bufOutMutexHandle, osWaitForever) == osOK) {
+                // monta o frame certo conforme a mensagem pedida
                 if(mensagem == sndPNGOK) {
-                    STR_BUFF(PNGRSP);       // respondo 'oper!' a um 'oper?' recebido
+                    STR_BUFF(PNGRSP);
                 } else if(mensagem == sndPING) {
-                    STR_BUFF(PNGPRG);       // envio meu próprio 'oper?' periódico
+                    STR_BUFF(PNGPRG);
                 } else if(mensagem == sndCRN) {
                     BufOUT[0] = 'c';
                     BufOUT[1] = Crono[0] + '0';
@@ -790,7 +778,7 @@ void UART_TX(void *argument) {
 void UART_RX(void *argument) {
     uart_frame_t frame;
 
-    // Inicia recepção DMA
+    // liga a DMA da UART pra receber sem ficar lendo byte a byte
     HAL_UART_Receive_DMA(&huart1, BufIN, sizeBuffs);
 
     for(;;) {
@@ -822,6 +810,7 @@ void UART_RX(void *argument) {
                       && frame.bytes[2] >= '0' && frame.bytes[2] <= '9'
                       && frame.bytes[3] >= '0' && frame.bytes[3] <= '9'
                       && frame.bytes[4] >= '0' && frame.bytes[4] <= '9') {
+                // CONVERSÃO DE ASCII: frame do cronômetro remoto
                 if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
                     ExCrono[0] = frame.bytes[1] - '0'; ExCrono[1] = frame.bytes[2] - '0';
                     ExCrono[2] = frame.bytes[3] - '0'; ExCrono[3] = frame.bytes[4] - '0';
@@ -831,6 +820,7 @@ void UART_RX(void *argument) {
                       && frame.bytes[2] >= '0' && frame.bytes[2] <= '9'
                       && frame.bytes[3] >= '0' && frame.bytes[3] <= '9'
                       && frame.bytes[4] >= '0' && frame.bytes[4] <= '9') {
+                // CONVERSÃO DE ASCII: frame do ADC remoto
                 if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
                     ExValAdc[0] = frame.bytes[1] - '0'; ExValAdc[1] = frame.bytes[2] - '0';
                     ExValAdc[2] = frame.bytes[3] - '0'; ExValAdc[3] = frame.bytes[4] - '0';
@@ -844,22 +834,19 @@ void UART_RX(void *argument) {
             if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
                 switch(evento) {
                     case rcvREQSRV:
-                        // colega pediu (rqsrv) -> EU (quem recebeu) não posso
-                        // recusar, entro no modo 4v/2s (item d)
+                        // colega pediu serviço; eu entro no modo de atendimento
                         atendendoColega = 1;
                         estado = ST_SERV_CRN;
                         break;
                     case rcvREQOFF:
-                        // colega desistiu de pedir meu serviço (apertou A3 dele,
-                        // item g) -> paro de mostrar os dados dele (item g.1)
+                        // colega desistiu; volto pro meu estado local
                         if(estado >= ST_SERV_CRN && estado <= ST_SERV_EXADC) {
                             estado = a1Pressed ? ST_LOCAL_CRN : ST_IDLE;
                         }
                         atendendoColega = 0;
                         break;
                     case rcvMSGNSV:
-                        // colega parou de ME servir (ele apertou A1 enquanto
-                        // me atendia, item d.2) -> mostro erro + buzzer (item e.1)
+                        // colega parou de me atender; toca erro de serviço
                         estado = ST_ERRO_SERVICO;
                         break;
                 }
@@ -879,6 +866,7 @@ void UART_RX(void *argument) {
   * @retval None
   */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+    // contadores de tempo: cronômetro, ADC, ping e troca de slot
     static uint16_t contaModo = 0;
     static uint16_t contaCRN = 0;
     static uint16_t contaADC = 0;
@@ -888,7 +876,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM4) {
         HAL_IncTick();
 
-        // CRONOMETRO
+        // cronômetro local vai contando em cima do timer
         if (contaCRN >= DT_CRONO) {
             contaCRN = 0;
             if(MD_CRONO == 0) {
@@ -913,7 +901,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
             ++contaCRN;
         }
 
-        // ADC
+        // ADC dispara uma leitura na frequência certa
         if (contaADC >= DT_ADC) {
             contaADC = 0;
             HAL_ADC_Start_IT(&hadc1);
@@ -921,13 +909,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
             ++contaADC;
         }
 
-        // PING (item a.4/a.5) --------------------------------------------
-        // rev 2026.08: NUNCA chamar osMutexAcquire/osMutexRelease aqui!
-        // Este callback roda como a própria base de tempo do HAL (TIM4),
-        // fora do controle do FreeRTOS e em prioridade mais alta do que o
-        // kernel permite para chamadas de API -> travava o sistema.
-        // A ISR só enfileira um comando de transmissão (timeout zero) e
-        // atualiza variáveis escalares; a task UART_TX monta o buffer.
+        // ping periódico: manda msg pra placa e se não responder, marca erro
         if(estado != ST_TESTE) {
             if(++ping_timer >= DT_PING) {
                 ping_timer = 0;
@@ -936,18 +918,18 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 
                 if(++ping_timeout >= 5) {
                     if(estado != ST_ERRO_CONEXAO) {
-                        estado = ST_ERRO_CONEXAO;  // item a.5
+                        estado = ST_ERRO_CONEXAO;
                     }
                     ping_timeout = 0;
                 }
             }
         }
 
-        // MÁQUINA DE ESTADOS (temporização do display) -------------------
+        // máquina de estados do display: troca o slot no tempo certo
         ++contaModo;
         switch(estado) {
             case ST_TESTE:
-                if(contaModo >= DT_Inicial) {          // item a.3 -> 3s
+                if(contaModo >= DT_Inicial) {
                     contaModo = 0;
                     estado = ST_AGUARDA_PING;
                     { uint8_t mensagem = sndPING;
@@ -955,7 +937,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
                 }
                 break;
             case ST_LOCAL_CRN:
-                if(contaModo >= DT_DISPLAY_MD1) {      // item b.1: 4s
+                if(contaModo >= DT_DISPLAY_MD1) {
                     estado = ST_LOCAL_ADC;
                     contaModo = 0;
                 }
@@ -967,7 +949,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
                 }
                 break;
             case ST_SERV_CRN:
-                if(contaModo >= DT_DISPLAY_MD2) {      // item d: 2s
+                if(contaModo >= DT_DISPLAY_MD2) {
                     estado = ST_SERV_ADC;
                     contaModo = 0;
                 }
@@ -982,8 +964,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
                 }
                 break;
             case ST_SERV_EXCRN:
-                /* Mantém o cronômetro remoto atualizado durante os 2 s em
-                 * que ele está visível. DT_NEWREQ é menor que 100 ms. */
+                // atualiza o cronômetro remoto enquanto esse slot tá ativo
                 if(++contaReqRemota >= DT_NEWREQ) {
                     uint8_t mensagem = sndREQCRN;
                     contaReqRemota = 0;
@@ -998,8 +979,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
                 }
                 break;
             case ST_SERV_EXADC:
-                /* O ADC também é atualizado enquanto o respectivo slot está
-                 * ativo; ele muda somente quando há nova amostra (2 Hz). */
+                // atualiza o ADC remoto enquanto esse slot tá ativo
                 if(++contaReqRemota >= DT_NEWREQ) {
                     uint8_t mensagem = sndREQADC;
                     contaReqRemota = 0;
@@ -1016,8 +996,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
             case ST_ERRO_CONEXAO:
             case ST_ERRO_SERVICO:
                 contaReqRemota = 0;
-                // sem transição automática por tempo aqui (ST_IDLE espera
-                // A1/rqsrv; os erros são tratados na task mostraDisplay)
+                // nesses estados o evento decide o que vai acontecer
                 break;
         }
     }
