@@ -110,6 +110,10 @@ void Error_Handler(void);
 #define DT_LEDS 200-1          // intervalo tempo para piscar leds e buzzer
 #define DT_ERROC 80-1          // intervalo curto para indicar erro
 #define DT_ERROL 2000-1        // intervalo longo para indicar erro
+// --- buzzer (informado pelo usuário: PB5) ---
+#define BUZZER_GPIO GPIOB
+#define BUZZER_PIN  GPIO_PIN_5
+#define DT_BUZZER_MS 5000      // duração do pulso de erro de serviço (item e.1)
 // para funcoes_display
 #define NDIGSDISP 4            // quatro digitos nos displays
 #define NUMSEGS 7              // ligar 7 segs (leds) em cada display
@@ -120,9 +124,34 @@ void Error_Handler(void);
 // vals enumerados dos SINAIS emitidos pelos botões
 enum {A1_FALL, A1_DOWN, A1_UP, A2_FALL, A2_DOWN, A2_UP, A3_FALL, A3_DOWN, A3_UP, NO_BOT};
 // valores enumerados dos sinais/msgs a serem ENVIADAS
-enum {sndNADA, sndCRN, sndADC, sndREQCRN, sndREQADC, sndREQSRV, sndREQOFF, sndPNGOK, sndMSGNSV};
+// sndPING = pedido de acrescentado no final p/ nao mexer nos vals ja usados
+enum {sndNADA, sndCRN, sndADC, sndREQCRN, sndREQADC, sndREQSRV, sndREQOFF, sndPNGOK, sndMSGNSV, sndPING};
 // valores enumerados dos sinais/msgs que foram RECEBIDAS
 enum {rcvNADA, rcvCRN, rcvADC, rcvREQCRN, rcvREQADC, rcvREQSRV, rcvREQOFF, rcvPNGREQ, rcvMSGNSV};
+
+/* Cada mensagem UART possui exatamente cinco bytes.  A fila de recepção
+ * carrega o quadro inteiro para que o DMA possa ser rearmado imediatamente
+ * sem a task consumir um BufIN já sobrescrito. */
+typedef struct {
+  uint8_t bytes[5];
+} uart_frame_t;
+
+/* ---- rev 2026.08: estados do display / máquina de estados (main.c) ----
+ * ST_TESTE       : 3s iniciais com todos os segmentos ligados (item a.3)
+ * ST_AGUARDA_PING: teste concluído; aguarda o primeiro "oper!"
+ * ST_IDLE        : pos-teste, PING ativo, A1 ainda não apertado -> mostra 8.8.8.8 (item c.1)
+ * ST_LOCAL_CRN   : A1 já apertado, modo 2v/4s -> mostra o próprio cronômetro (item b)
+ * ST_LOCAL_ADC   : A1 já apertado, modo 2v/4s -> mostra o próprio ADC (item b)
+ * ST_SERV_CRN    : atendendo o colega (recebi rqsrv), modo 4v/2s, slot 1: próprio crono (item d)
+ * ST_SERV_ADC    : modo 4v/2s, slot 2: próprio ADC (item d)
+ * ST_SERV_EXCRN  : modo 4v/2s, slot 3: crono do colega (item d)
+ * ST_SERV_EXADC  : modo 4v/2s, slot 4: ADC do colega (item d)
+ * ST_ERRO_CONEXAO: PING sem resposta -> mostra nCon, espera reset (item a.5)
+ * ST_ERRO_SERVICO: recebi msnos (colega parou de me servir) -> n5Er + buzzer 5s (item e.1)
+ * ------------------------------------------------------------------------*/
+enum {ST_TESTE, ST_AGUARDA_PING, ST_IDLE, ST_LOCAL_CRN, ST_LOCAL_ADC,
+      ST_SERV_CRN, ST_SERV_ADC, ST_SERV_EXCRN, ST_SERV_EXADC,
+      ST_ERRO_CONEXAO, ST_ERRO_SERVICO};
 
 // @definições para teste de uma função minha, vcs não vão utilizar...
 //#define GPIOA_IDR *((uint32_t *)0x40010C08ul) // end. reg GPIOB Input Data

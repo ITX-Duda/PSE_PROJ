@@ -17,6 +17,7 @@
   * PA5 =1 na entrada do callBack do RxCpltCallback(), =0 na saída
   * PB7 =1 na entrada do PeriodElapsedCallback(), =0 ma saída
   *
+  *
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -26,7 +27,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "funcoes_SPI_display.h"   // funções do display 7 segmentos
+// --- veja includes, macro, e constantes no main.h ---
+// #include "funcoes_SPI_display.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -86,14 +88,26 @@ const osThreadAttr_t fn_UART_RX_attributes = {
   .stack_size = 64 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
-/* Definitions for fn_stateMachine */
-osThreadId_t fn_stateMachineHandle;
-const osThreadAttr_t fn_stateMachine_attributes = {
-  .name = "fn_stateMachine",
-  .stack_size = 64 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+/* Definitions for fila_uart_eventos */
+osMessageQueueId_t fila_uart_eventosHandle;
+const osMessageQueueAttr_t fila_uart_eventos_attributes = {
+  .name = "fila_uart_eventos"
 };
-
+/* Definitions for fila_uart_tx */
+osMessageQueueId_t fila_uart_txHandle;
+const osMessageQueueAttr_t fila_uart_tx_attributes = {
+  .name = "fila_uart_tx"
+};
+/* Definitions for estadoMutex */
+osMutexId_t estadoMutexHandle;
+const osMutexAttr_t estadoMutex_attributes = {
+  .name = "estadoMutex"
+};
+/* Definitions for bufOutMutex */
+osMutexId_t bufOutMutexHandle;
+const osMutexAttr_t bufOutMutex_attributes = {
+  .name = "bufOutMutex"
+};
 /* USER CODE BEGIN PV */
 // variáveis que todos vamos usar: buffers de entrada/saída na comunicação
 // buffers para entrada e saida de dados via USART
@@ -104,13 +118,27 @@ size_t sizeBuffs = sizeof(BufOUT);     // tamanho dos buffers - usa geral
 // qual dig liga pto? (ex: 0xA=>1010=> 1000=MSD + 0010=DG2)
 uint8_t ptoDec = 0;
 uint8_t oQueEnv = 0;
+volatile uint8_t ping_timeout = 0;
+volatile uint8_t link_ok = 0;
 int timerBotao = 0;
-uint16_t buzzerTimer = 0;   // temporizador para desligar o buzzer
+
 // os vetores abaixo tem idx[0] = digito menos significativo no display
-int8_t estado = 0;
+volatile int8_t estado = ST_TESTE;
+// rev 2026.08: a antiga flag única 'estaServ' foi separada em duas,
+// pois são conceitos independentes no enunciado (itens d, e, g, g.2):
+uint8_t atendendoColega = 0;   // =1 se RECEBI rqsrv e estou servindo o colega
+uint8_t a1Pressed = 0;         // =1 depois que A1 foi apertado ao menos 1x
+int8_t modoBotao = 0;
 int8_t testeDisplay[] = {8,8,8,8};
+/* 0x11, 0x12 e 0x13 são os glifos minúsculos o, n e r, implementados no driver
+ * de 7 segmentos. Os vetores são LSB -> MSB, como Crono e ValAdc. */
+int8_t nCon[] = {0x12,0x11,0x0C,0x12};  // "nCon"
+int8_t nSer[] = {0x13,0x0E,5,0x12};     // "n5Er"
 int8_t Crono[] = {0,0,0,0};            // vetor com vals decimais do cronometro
 int8_t ValAdc[] = {0,0,0,0};           // vetor com vals decimais do ADC
+int8_t ExCrono[] = {0,0,0,0};          // vetor com vals decimais do cronometro
+int8_t ExValAdc[] = {0,0,0,0};         // vetor com vals decimais do ADC
+size_t sizeVals = sizeof(Crono);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -119,13 +147,11 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_USART1_UART_Init(void);
-static void MX_TIM4_Init(void);     // <-- protótipo adicionado
 void StartDefaultTask(void *argument);
 void checaBotao(void *argument);
 void mostraDisplay(void *argument);
 void UART_TX(void *argument);
 void UART_RX(void *argument);
-void stateMachine(void *argument);   // <-- protótipo adicionado
 
 static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
@@ -174,16 +200,18 @@ int main(void)
   MX_NVIC_Init();
   /* USER CODE BEGIN 2 */
 
-  // Inicializa o display (se a função existir)
-  // initDisplay(); // descomente se existir
-
   /* USER CODE END 2 */
 
   /* Init scheduler */
   osKernelInitialize();
+  /* Create the mutex(es) */
+  /* creation of estadoMutex */
+  estadoMutexHandle = osMutexNew(&estadoMutex_attributes);
+
+  /* creation of bufOutMutex */
+  bufOutMutexHandle = osMutexNew(&bufOutMutex_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -194,8 +222,12 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* creation of fila_uart_eventos */
+  fila_uart_eventosHandle = osMessageQueueNew(16, sizeof(uart_frame_t), &fila_uart_eventos_attributes);
+  fila_uart_txHandle = osMessageQueueNew(16, sizeof(uint8_t), &fila_uart_tx_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -213,9 +245,6 @@ int main(void)
 
   /* creation of fn_UART_RX */
   fn_UART_RXHandle = osThreadNew(UART_RX, NULL, &fn_UART_RX_attributes);
-
-  /* creation of fn_stateMachine */
-  fn_stateMachineHandle = osThreadNew(stateMachine, NULL, &fn_stateMachine_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -309,9 +338,6 @@ static void MX_NVIC_Init(void)
   /* USART1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(USART1_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(USART1_IRQn);
-  /* TIM4_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(TIM4_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(TIM4_IRQn);
 }
 
 /**
@@ -414,11 +440,6 @@ static void MX_DMA_Init(void)
 }
 
 /**
-  * @brief TIM4 Initialization Function
-  * @param None
-  * @retval None
-  */
-/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -438,7 +459,12 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10|GPIO_PIN_6|GPIO_PIN_9, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_5|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_SET);
+
+  /* rev 2026.08: buzzer no PB5 - inicia desligado (mesmo nível ativo-baixo
+     dos LEDs B12..B15; se o buzzer soar invertido, troque SET<->RESET aqui
+     e em mostraDisplay()) */
+  HAL_GPIO_WritePin(BUZZER_GPIO, BUZZER_PIN, GPIO_PIN_SET);
 
   /*Configure GPIO pins : PA1 PA2 PA3 */
   GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3;
@@ -446,10 +472,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB10 PB12 PB13 PB14
-                           PB15 PB5 PB6 PB9 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10|GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14
-                          |GPIO_PIN_15|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_9;
+  /*Configure GPIO pins : PB5 PB10 PB12 PB13 PB14
+                           PB15 PB6 PB9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_10|GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14
+                          |GPIO_PIN_15|GPIO_PIN_6|GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -461,36 +487,36 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-
+// fn que atende ao callback da ISR do conversor ADC1
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
-  uint16_t val_adc = 0;
-  if(hadc->Instance == ADC1) {
-    val_adc = HAL_ADC_GetValue(&hadc1);
+  uint16_t val_adc = 0;                // define var para ler ADC
+  if(hadc->Instance == ADC1) {         // se veio ADC1
+    val_adc = HAL_ADC_GetValue(&hadc1);// capta valor adc
+    // converter o valor lido em valores hexa p/ display
     int miliVolt = val_adc*3300/4095;
     int uniADC = miliVolt/1000;
     int decADC = (miliVolt-(uniADC*1000))/100;
     int cnsADC = (miliVolt-(uniADC*1000)-(decADC*100))/10;
     int mlsADC = miliVolt-(uniADC*1000)-(decADC*100)-(cnsADC*10);
-    ValAdc[3] = uniADC;
+    ValAdc[3] = uniADC;                // dig mais significativo
     ValAdc[2] = decADC;
     ValAdc[1] = cnsADC;
-    ValAdc[0] = mlsADC;
+    ValAdc[0] = mlsADC;                // dig menos significativo
   }
 }
 
+// A ISR apenas copia o quadro DMA para a fila e rearma a recepção.  A
+// interpretação e qualquer alteração de estado ficam na task UART_RX.
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART1) {
+        uart_frame_t frame;
+        memcpy(frame.bytes, BufIN, sizeof(frame.bytes));
+        (void)osMessageQueuePut(fila_uart_eventosHandle, &frame, 0, 0);
+    }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-  if (huart->Instance == USART1) {
-    if (BufIN[0] == 'o' && BufIN[1] == 'p' && BufIN[2] == 'e' && BufIN[3] == 'r' && BufIN[4] == '?') {
-      BufOUT[0]='o'; BufOUT[1]='p'; BufOUT[2]='e'; BufOUT[3]='r'; BufOUT[4]='!';
-      HAL_UART_Transmit_DMA(&huart1, BufOUT, sizeBuffs);
-    }
-    else if (BufIN[0] == 'o' && BufIN[1] == 'p' && BufIN[2] == 'e' && BufIN[3] == 'r' && BufIN[4] == '!') {
-    }
+    // Reativa recepção DMA
     HAL_UART_Receive_DMA(&huart1, BufIN, sizeBuffs);
-  }
 }
 
 /* USER CODE END 4 */
@@ -508,6 +534,7 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
+	  // essa é a task default - vai colocar algo nela?
     osDelay(1);
   }
   /* USER CODE END 5 */
@@ -520,18 +547,68 @@ void StartDefaultTask(void *argument)
 * @retval None
 */
 /* USER CODE END Header_checaBotao */
-void checaBotao(void *argument)
-{
-  /* USER CODE BEGIN checaBotao */
-  /* Infinite loop */
-  for(;;)
-  {
-    if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1) == GPIO_PIN_RESET){
-      timerBotao = DT_DISPLAY_MD2;
+void checaBotao(void *argument) {
+    uint8_t ultimo_a1 = 1, ultimo_a2 = 1, ultimo_a3 = 1;
+    uint32_t delay_antirrebote = 0;
+
+    for(;;) {
+        uint8_t a1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1);
+        uint8_t a2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+        uint8_t a3 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+
+        if(delay_antirrebote == 0) {
+            // A interação só é habilitada após a confirmação do PING.
+            // Botão A1 - (re)inicia o modo local 2v/4s (item b) e, se eu
+            // estiver atendendo o colega (recebi rqsrv), informa que não
+            // está mais disponível com 'msnos' - NÃO mexe no
+            // meu próprio display por conta de A2 (isso é feito só pelo
+            // colega que recebe o rqsrv - item c.1)
+            if(link_ok && a1 == GPIO_PIN_RESET && ultimo_a1 == GPIO_PIN_SET) {
+                if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
+                    if(atendendoColega) {
+                        // A placa que presta o serviço avisa o cliente com
+                        // "msnos"; o cliente então exibe 5Er e aciona buzzer.
+                        uint8_t mensagem = sndMSGNSV;
+                        (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
+                        atendendoColega = 0;
+                    }
+                    a1Pressed = 1;
+                    // só entra no ciclo local se não estiver, nesse momento,
+                    // mostrando erro de conexão (estado permanece até reset)
+                    if(estado != ST_ERRO_CONEXAO) {
+                        estado = ST_LOCAL_CRN;
+                    }
+                    osMutexRelease(estadoMutexHandle);
+                }
+                delay_antirrebote = DT_DEBOUNCING;
+            }
+
+            // Botão A2 - requisita que o COLEGA me exiba (envia rqsrv);
+            // meu próprio display não muda (item c, c.1)
+            if(link_ok && a2 == GPIO_PIN_RESET && ultimo_a2 == GPIO_PIN_SET) {
+                uint8_t mensagem = sndREQSRV;
+                (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
+                delay_antirrebote = DT_DEBOUNCING;
+            }
+
+            // Botão A3 - desiste de PEDIR o serviço do colega (envia rqoff);
+            // não libera o atendimento que EU presto a ele, se houver
+            // (item g, g.2)
+            if(link_ok && a3 == GPIO_PIN_RESET && ultimo_a3 == GPIO_PIN_SET) {
+                uint8_t mensagem = sndREQOFF;
+                (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
+                delay_antirrebote = DT_DEBOUNCING;
+            }
+        } else {
+            delay_antirrebote--;
+        }
+
+        ultimo_a1 = a1;
+        ultimo_a2 = a2;
+        ultimo_a3 = a3;
+
+        osDelay(10);
     }
-    osDelay(1);
-  }
-  /* USER CODE END checaBotao */
 }
 
 /* USER CODE BEGIN Header_mostraDisplay */
@@ -541,15 +618,113 @@ void checaBotao(void *argument)
 * @retval None
 */
 /* USER CODE END Header_mostraDisplay */
-void mostraDisplay(void *argument)
-{
-  /* USER CODE BEGIN mostraDisplay */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END mostraDisplay */
+void mostraDisplay(void *argument) {
+    int8_t estado_local;
+    int8_t ex_crono_local[4];
+    int8_t ex_adc_local[4];
+    uint32_t led_timer = 0;
+    uint8_t led_state = 0;
+    static uint32_t timer_5er = 0;
+    static uint8_t mostrando_5er = 0;
+
+    for(;;) {
+        if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
+            estado_local = estado;
+            memcpy(ex_crono_local, ExCrono, sizeof(ex_crono_local));
+            memcpy(ex_adc_local, ExValAdc, sizeof(ex_adc_local));
+            osMutexRelease(estadoMutexHandle);
+        } else {
+            estado_local = 0;
+            memset(ex_crono_local, 0, sizeof(ex_crono_local));
+            memset(ex_adc_local, 0, sizeof(ex_adc_local));
+        }
+
+        // Lógica de piscar LEDs (200ms ON/OFF)
+        led_timer += DT_MUX_DISP;
+        if(led_timer >= (DT_LEDS + 1)) {
+            led_timer = 0;
+            led_state = !led_state;
+        }
+
+        // ST_ERRO_SERVICO: "n5Er" + buzzer por 5s (item e.1)
+        if(estado_local == ST_ERRO_SERVICO) {
+            if(!mostrando_5er) {
+                mostrando_5er = 1;
+                timer_5er = 0;
+            }
+            timer_5er++;
+            mostrar_no_display(nSer, 0);
+            // O enunciado pede pulso intermitente de 200 ms ON/OFF.
+            HAL_GPIO_WritePin(BUZZER_GPIO, BUZZER_PIN,
+                              led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+
+            if(timer_5er >= (DT_BUZZER_MS / DT_MUX_DISP)) {
+                mostrando_5er = 0;
+                HAL_GPIO_WritePin(BUZZER_GPIO, BUZZER_PIN, GPIO_PIN_SET); // desliga buzzer
+                if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
+                    // volto ao meu estado local de base (item e.1 é sempre
+                    // sobre o meu próprio display de requisitante)
+                    estado = a1Pressed ? ST_LOCAL_CRN : ST_IDLE;
+                    osMutexRelease(estadoMutexHandle);
+                }
+            }
+            osDelay(DT_MUX_DISP);
+            continue;
+        }
+
+        // ST_ERRO_CONEXAO: "nCon", espera reset (item a.5)
+        if(estado_local == ST_ERRO_CONEXAO) {
+            mostrar_no_display(nCon, 0);
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(BUZZER_GPIO, BUZZER_PIN, GPIO_PIN_SET);
+            osDelay(DT_MUX_DISP);
+            continue;
+        }
+
+        // Display normal
+        switch(estado_local) {
+            case ST_TESTE:
+                mostrar_no_display(testeDisplay, 15);      // 8.8.8.8 (item a.3)
+                break;
+            case ST_IDLE:
+                mostrar_no_display(testeDisplay, 15);      // 8.8.8.8 (item c.1)
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
+                break;
+            case ST_LOCAL_CRN:                             // item b.1
+                mostrar_no_display(Crono, 10);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
+                break;
+            case ST_LOCAL_ADC:                             // item b.1
+                mostrar_no_display(ValAdc, 8);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
+                break;
+            case ST_SERV_CRN:                              // item d, slot D1
+                // se ainda não apertei A1, mostro 8.8.8.8 no meu lugar (item d.1)
+                mostrar_no_display(a1Pressed ? Crono : testeDisplay, a1Pressed ? 10 : 15);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
+                break;
+            case ST_SERV_ADC:                              // item d, slot D2
+                mostrar_no_display(a1Pressed ? ValAdc : testeDisplay, a1Pressed ? 8 : 15);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
+                break;
+            case ST_SERV_EXCRN:                            // item d, slot D3 (PB13)
+                mostrar_no_display(ex_crono_local, 10);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_12, GPIO_PIN_SET);
+                break;
+            case ST_SERV_EXADC:                            // item d, slot D4 (PB12)
+                mostrar_no_display(ex_adc_local, 8);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, led_state ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_13, GPIO_PIN_SET);
+                break;
+        }
+
+        osDelay(DT_MUX_DISP);
+    }
 }
 
 /* USER CODE BEGIN Header_UART_TX */
@@ -559,27 +734,51 @@ void mostraDisplay(void *argument)
 * @retval None
 */
 /* USER CODE END Header_UART_TX */
-void UART_TX(void *argument)
-{
-  /* USER CODE BEGIN UART_TX */
-  for(;;)
-  {
-    if(HAL_UART_GetState(&huart1) != HAL_UART_STATE_BUSY_TX){
-      if(oQueEnv == 5){
-        BufOUT[0]='o'; BufOUT[1]='p'; BufOUT[2]='e'; BufOUT[3]='r'; BufOUT[4]='!';
-        HAL_UART_Transmit_DMA(&huart1, BufOUT, sizeBuffs);
-        oQueEnv = 0;
-      }
-      else if(oQueEnv == 1){
-        BufOUT[0]='o'; BufOUT[1]='p'; BufOUT[2]='e'; BufOUT[3]='r'; BufOUT[4]='?';
-        HAL_UART_Transmit_DMA(&huart1, BufOUT, sizeBuffs);
-        oQueEnv = 0;
-      }
+void UART_TX(void *argument) {
+    uint8_t mensagem;
+
+    for(;;) {
+        if(osMessageQueueGet(fila_uart_txHandle, &mensagem, NULL, osWaitForever) == osOK) {
+            /* gState representa exclusivamente o transmissor; a recepção
+             * DMA contínua mantém o estado global como BUSY_RX. */
+            while(huart1.gState != HAL_UART_STATE_READY) {
+                osDelay(1);
+            }
+            if(osMutexAcquire(bufOutMutexHandle, osWaitForever) == osOK) {
+                if(mensagem == sndPNGOK) {
+                    STR_BUFF(PNGRSP);       // respondo 'oper!' a um 'oper?' recebido
+                } else if(mensagem == sndPING) {
+                    STR_BUFF(PNGPRG);       // envio meu próprio 'oper?' periódico
+                } else if(mensagem == sndCRN) {
+                    BufOUT[0] = 'c';
+                    BufOUT[1] = Crono[0] + '0';
+                    BufOUT[2] = Crono[1] + '0';
+                    BufOUT[3] = Crono[2] + '0';
+                    BufOUT[4] = Crono[3] + '0';
+                } else if(mensagem == sndADC) {
+                    BufOUT[0] = 'a';
+                    BufOUT[1] = ValAdc[0] + '0';
+                    BufOUT[2] = ValAdc[1] + '0';
+                    BufOUT[3] = ValAdc[2] + '0';
+                    BufOUT[4] = ValAdc[3] + '0';
+                } else if(mensagem == sndREQCRN) {
+                    STR_BUFF(REQCRN);
+                } else if(mensagem == sndREQADC) {
+                    STR_BUFF(REQADC);
+                } else if(mensagem == sndREQSRV) {
+                    STR_BUFF(REQSRV);
+                } else if(mensagem == sndREQOFF) {
+                    STR_BUFF(REQOFF);
+                } else if(mensagem == sndMSGNSV) {
+                    STR_BUFF(MSGNSV);
+                }
+                (void)HAL_UART_Transmit_DMA(&huart1, BufOUT, sizeBuffs);
+                osMutexRelease(bufOutMutexHandle);
+            }
+        }
     }
-    osDelay(5);
-  }
-  /* USER CODE END UART_TX */
 }
+  /* USER CODE END UART_TX */
 
 /* USER CODE BEGIN Header_UART_RX */
 /**
@@ -588,158 +787,240 @@ void UART_TX(void *argument)
 * @retval None
 */
 /* USER CODE END Header_UART_RX */
-void UART_RX(void *argument)
-{
-  /* USER CODE BEGIN UART_RX */
-  HAL_UART_Receive_DMA(&huart1, BufIN, sizeBuffs);
-  for(;;)
-  {
-    osDelay(10);
-  }
-  /* USER CODE END UART_RX */
-}
+void UART_RX(void *argument) {
+    uart_frame_t frame;
 
-/* USER CODE BEGIN Header_stateMachine */
-/**
-* @brief Function implementing the fn_stateMachine thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_stateMachine */
-void stateMachine(void *argument)
-{
-  /* USER CODE BEGIN stateMachine */
-  for(;;)
-  {
-    if(estado == 0){
-      mostrar_no_display(testeDisplay, 15);
-    } else if (estado == 1){
-      mostrar_no_display(Crono, 10);
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);
-    } else if (estado == 2){
-      mostrar_no_display(ValAdc, 8);
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET);
+    // Inicia recepção DMA
+    HAL_UART_Receive_DMA(&huart1, BufIN, sizeBuffs);
+
+    for(;;) {
+        if(osMessageQueueGet(fila_uart_eventosHandle, &frame, NULL, osWaitForever) == osOK) {
+            uint8_t evento = rcvNADA;
+            uint8_t mensagem = sndNADA;
+            if(memcmp(frame.bytes, PNGPRG, 5) == 0) {
+                mensagem = sndPNGOK;
+            } else if(memcmp(frame.bytes, PNGRSP, 5) == 0) {
+                ping_timeout = 0;
+                link_ok = 1;
+                if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
+                    if(estado == ST_AGUARDA_PING) {
+                        estado = ST_IDLE;
+                    }
+                    osMutexRelease(estadoMutexHandle);
+                }
+            } else if(memcmp(frame.bytes, REQCRN, 5) == 0) {
+                mensagem = sndCRN;
+            } else if(memcmp(frame.bytes, REQADC, 5) == 0) {
+                mensagem = sndADC;
+            } else if(memcmp(frame.bytes, REQSRV, 5) == 0) {
+                evento = rcvREQSRV;
+            } else if(memcmp(frame.bytes, REQOFF, 5) == 0) {
+                evento = rcvREQOFF;
+            } else if(memcmp(frame.bytes, MSGNSV, 5) == 0) {
+                evento = rcvMSGNSV;
+            } else if(frame.bytes[0] == 'c' && frame.bytes[1] >= '0' && frame.bytes[1] <= '9'
+                      && frame.bytes[2] >= '0' && frame.bytes[2] <= '9'
+                      && frame.bytes[3] >= '0' && frame.bytes[3] <= '9'
+                      && frame.bytes[4] >= '0' && frame.bytes[4] <= '9') {
+                if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
+                    ExCrono[0] = frame.bytes[1] - '0'; ExCrono[1] = frame.bytes[2] - '0';
+                    ExCrono[2] = frame.bytes[3] - '0'; ExCrono[3] = frame.bytes[4] - '0';
+                    osMutexRelease(estadoMutexHandle);
+                }
+            } else if(frame.bytes[0] == 'a' && frame.bytes[1] >= '0' && frame.bytes[1] <= '9'
+                      && frame.bytes[2] >= '0' && frame.bytes[2] <= '9'
+                      && frame.bytes[3] >= '0' && frame.bytes[3] <= '9'
+                      && frame.bytes[4] >= '0' && frame.bytes[4] <= '9') {
+                if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
+                    ExValAdc[0] = frame.bytes[1] - '0'; ExValAdc[1] = frame.bytes[2] - '0';
+                    ExValAdc[2] = frame.bytes[3] - '0'; ExValAdc[3] = frame.bytes[4] - '0';
+                    osMutexRelease(estadoMutexHandle);
+                }
+            }
+            if(mensagem != sndNADA) {
+                (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
+            }
+            if(evento != rcvNADA) {
+            if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
+                switch(evento) {
+                    case rcvREQSRV:
+                        // colega pediu (rqsrv) -> EU (quem recebeu) não posso
+                        // recusar, entro no modo 4v/2s (item d)
+                        atendendoColega = 1;
+                        estado = ST_SERV_CRN;
+                        break;
+                    case rcvREQOFF:
+                        // colega desistiu de pedir meu serviço (apertou A3 dele,
+                        // item g) -> paro de mostrar os dados dele (item g.1)
+                        if(estado >= ST_SERV_CRN && estado <= ST_SERV_EXADC) {
+                            estado = a1Pressed ? ST_LOCAL_CRN : ST_IDLE;
+                        }
+                        atendendoColega = 0;
+                        break;
+                    case rcvMSGNSV:
+                        // colega parou de ME servir (ele apertou A1 enquanto
+                        // me atendia, item d.2) -> mostro erro + buzzer (item e.1)
+                        estado = ST_ERRO_SERVICO;
+                        break;
+                }
+                osMutexRelease(estadoMutexHandle);
+            }
+            }
+        }
     }
-    osDelay(5);
-  }
-  /* USER CODE END stateMachine */
 }
 
 /**
   * @brief  Period elapsed callback in non blocking mode
-  * @note   This function is called when TIM4 interrupt takes place.
+  * @note   This function is called  when TIM4 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
   * @param  htim : TIM handle
   * @retval None
   */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-  /* USER CODE BEGIN Callback 0 */
-  uint16_t static contaModo = 0;
-  uint16_t static contaCRN = 0;
-  uint16_t static contaADC = 0;
-  uint16_t static contaPing = 0;
-  /* USER CODE END Callback 0 */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+    static uint16_t contaModo = 0;
+    static uint16_t contaCRN = 0;
+    static uint16_t contaADC = 0;
+    static uint16_t ping_timer = 0;
+    static uint16_t contaReqRemota = 0;
 
-  if (htim->Instance == TIM4)
-  {
-    HAL_IncTick();
-  }
+    if (htim->Instance == TIM4) {
+        HAL_IncTick();
 
-  /* USER CODE BEGIN Callback 1 */
-  if (contaCRN >= DT_CRONO)
-  {
-    contaCRN = 0;
-    if(MD_CRONO == 0){
-      ++Crono[0];
-      if (Crono[0] > 9){
-        Crono[0] = 0;
-        ++Crono[1];
-        if (Crono[1] > 9){
-          Crono[1] = 0;
-          ++Crono[2];
-          if (Crono[2] > 5){
-            Crono[2] = 0;
-            ++Crono[3];
-            if (Crono[3] > 9){
-              Crono[3] = 0;
+        // CRONOMETRO
+        if (contaCRN >= DT_CRONO) {
+            contaCRN = 0;
+            if(MD_CRONO == 0) {
+                ++Crono[0];
+                if (Crono[0] > 9) {
+                    Crono[0] = 0;
+                    ++Crono[1];
+                    if (Crono[1] > 9) {
+                        Crono[1] = 0;
+                        ++Crono[2];
+                        if (Crono[2] > 5) {
+                            Crono[2] = 0;
+                            ++Crono[3];
+                            if (Crono[3] > 9) {
+                                Crono[3] = 0;
+                            }
+                        }
+                    }
+                }
             }
-          }
+        } else {
+            ++contaCRN;
         }
-      }
-    } else {
-      --Crono[0];
-      if (Crono[0] < 0){
-        Crono[0] = 9;
-        --Crono[1];
-        if (Crono[1] < 0){
-          Crono[1] = 9;
-          --Crono[2];
-          if (Crono[2] < 0){
-            Crono[2] = 5;
-            --Crono[3];
-            if (Crono[3] < 0){
-              Crono[3] = 9;
+
+        // ADC
+        if (contaADC >= DT_ADC) {
+            contaADC = 0;
+            HAL_ADC_Start_IT(&hadc1);
+        } else {
+            ++contaADC;
+        }
+
+        // PING (item a.4/a.5) --------------------------------------------
+        // rev 2026.08: NUNCA chamar osMutexAcquire/osMutexRelease aqui!
+        // Este callback roda como a própria base de tempo do HAL (TIM4),
+        // fora do controle do FreeRTOS e em prioridade mais alta do que o
+        // kernel permite para chamadas de API -> travava o sistema.
+        // A ISR só enfileira um comando de transmissão (timeout zero) e
+        // atualiza variáveis escalares; a task UART_TX monta o buffer.
+        if(estado != ST_TESTE) {
+            if(++ping_timer >= DT_PING) {
+                ping_timer = 0;
+                uint8_t mensagem = sndPING;
+                (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
+
+                if(++ping_timeout >= 5) {
+                    if(estado != ST_ERRO_CONEXAO) {
+                        estado = ST_ERRO_CONEXAO;  // item a.5
+                    }
+                    ping_timeout = 0;
+                }
             }
-          }
         }
-      }
+
+        // MÁQUINA DE ESTADOS (temporização do display) -------------------
+        ++contaModo;
+        switch(estado) {
+            case ST_TESTE:
+                if(contaModo >= DT_Inicial) {          // item a.3 -> 3s
+                    contaModo = 0;
+                    estado = ST_AGUARDA_PING;
+                    { uint8_t mensagem = sndPING;
+                      (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0); }
+                }
+                break;
+            case ST_LOCAL_CRN:
+                if(contaModo >= DT_DISPLAY_MD1) {      // item b.1: 4s
+                    estado = ST_LOCAL_ADC;
+                    contaModo = 0;
+                }
+                break;
+            case ST_LOCAL_ADC:
+                if(contaModo >= DT_DISPLAY_MD1) {
+                    estado = ST_LOCAL_CRN;
+                    contaModo = 0;
+                }
+                break;
+            case ST_SERV_CRN:
+                if(contaModo >= DT_DISPLAY_MD2) {      // item d: 2s
+                    estado = ST_SERV_ADC;
+                    contaModo = 0;
+                }
+                break;
+            case ST_SERV_ADC:
+                if(contaModo >= DT_DISPLAY_MD2) {
+                    estado = ST_SERV_EXCRN;
+                    contaModo = 0;
+                    contaReqRemota = 0;
+                    { uint8_t mensagem = sndREQCRN;
+                      (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0); }
+                }
+                break;
+            case ST_SERV_EXCRN:
+                /* Mantém o cronômetro remoto atualizado durante os 2 s em
+                 * que ele está visível. DT_NEWREQ é menor que 100 ms. */
+                if(++contaReqRemota >= DT_NEWREQ) {
+                    uint8_t mensagem = sndREQCRN;
+                    contaReqRemota = 0;
+                    (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
+                }
+                if(contaModo >= DT_DISPLAY_MD2) {
+                    estado = ST_SERV_EXADC;
+                    contaModo = 0;
+                    contaReqRemota = 0;
+                    { uint8_t mensagem = sndREQADC;
+                      (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0); }
+                }
+                break;
+            case ST_SERV_EXADC:
+                /* O ADC também é atualizado enquanto o respectivo slot está
+                 * ativo; ele muda somente quando há nova amostra (2 Hz). */
+                if(++contaReqRemota >= DT_NEWREQ) {
+                    uint8_t mensagem = sndREQADC;
+                    contaReqRemota = 0;
+                    (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
+                }
+                if(contaModo >= DT_DISPLAY_MD2) {
+                    estado = ST_SERV_CRN;
+                    contaModo = 0;
+                    contaReqRemota = 0;
+                }
+                break;
+            case ST_IDLE:
+            case ST_AGUARDA_PING:
+            case ST_ERRO_CONEXAO:
+            case ST_ERRO_SERVICO:
+                contaReqRemota = 0;
+                // sem transição automática por tempo aqui (ST_IDLE espera
+                // A1/rqsrv; os erros são tratados na task mostraDisplay)
+                break;
+        }
     }
-  } else {
-    ++contaCRN;
-  }
-
-  if (contaADC >= DT_ADC) {
-    contaADC = 0;
-    HAL_ADC_Start_IT(&hadc1);
-  } else {
-    ++contaADC;
-  }
-
-
-  if (contaPing >= DT_PING) {
-    if (estado >= 1) {
-      if (oQueEnv == 0) {
-        oQueEnv = 1;
-        contaPing = 0;
-		buzzerTimer = 50;
-      }
-    }
-  } else {
-    ++contaPing;
-  }
-
-
-  ++contaModo;
-  switch(estado) {
-    case 0:
-      if (contaModo >= DT_Inicial) {
-        estado = 1;
-        contaModo = 0;
-      }
-      break;
-    case 1:
-      if (contaModo >= DT_DISPLAY_MD2 + timerBotao) {
-        estado = 2;
-        contaModo = 0;
-      }
-      break;
-    case 2:
-      if (contaModo >= DT_DISPLAY_MD1) {
-        estado = 1;
-        contaModo = 0;
-      }
-      break;
-  }
-
-  if (buzzerTimer > 0) {
-      buzzerTimer--;
-      if (buzzerTimer == 0) {
-          HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
-      }
-  }
-  /* USER CODE END Callback 1 */
 }
 
 /**
