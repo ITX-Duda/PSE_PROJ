@@ -106,6 +106,7 @@ size_t sizeBuffs = sizeof(BufOUT);     // tamanho dos buffers - usa geral
 uint8_t ptoDec = 0;
 uint8_t oQueEnv = 0;
 int timerBotao = 0;
+int timerBuzzer = 0;
 
 // os vetores abaixo tem idx[0] = digito menos significativo no display
 volatile uint8_t pingOK = 0;
@@ -113,7 +114,7 @@ volatile uint16_t tempoSemResposta = 0;
 int8_t apertouA1 = 0;
 int8_t estado = 0;
 int8_t estaServ = 0;
-int8_t erroDisplay[] = {0xE,0xE,0xE,0xE} //para erro (como escreve ncon em HEX?)
+int8_t erroDisplay[] = {0xE,0xE,0xE,0xE}; //para erro (como escreve ncon em HEX?)
 int8_t modoBotao = 0;
 int8_t testeDisplay[] = {8,8,8,8};
 int8_t Crono[] = {0,0,0,0};            // vetor com vals decimais do cronometro
@@ -536,17 +537,17 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	      // se veio "rqoff" esta' solicitando PARAR de atuar como Server
 		  oQueEnv = rcvREQOFF;
 		  //Volta para o modo de amostragem local
-		  	  if (apertouA1 == 1){
-		         estado = 1;
-		  	  	 estarServ = 0; }
-		      else if (apertouA1 == 0)
-		         estado = 0;
-	  	  	  	 esServ = 0; }
+		  if (apertouA1 == 1){
+			  estado = 1;
+		  	  estaServ = 0; }
+		  else if { (apertouA1 == 0)
+		      estado = 0;
+	  	  	  estaServ = 0; }
 		 }
 
       }
       	  // tem mais itens nesse IF!!!
-	  }
+
 	  // redispara a UART para receber dados novamente pelo DMA controller
 	  HAL_UART_Receive_DMA(&huart1, BufIN, sizeBuffs);
   }
@@ -747,15 +748,23 @@ void stateMachine(void *argument)
 		  } break;
 	  case 7:
 		  //Estado erro ncon
-		  mostrar_no_display(erroDisplay,0)
+		  mostrar_no_display(erroDisplay,0);
 		  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15,GPIO_PIN_RESET);
 //		  for(;;) - essa parte trava a placa, esperando um reset que é o que pede no pdf
 //		  {
 //		  	osDelay(100);
 //		  }
-
-
-		  } break;
+	  	   break;
+	  case 8:
+		  //Estado no-service
+		  mostrar_no_display(erroDisplay,0);
+		  HAL_GPIO_WritePin(GPIOA,GPIO_PIN_15,GPIO_PIN_RESET);
+		  timerBuzzer = 0;
+		  if(timerBuzzer>= DT_BUZZER)
+		      {
+		         HAL_GPIO_WritePin(GPIOA,GPIO_PIN_15,GPIO_PIN_RESET);
+		      }
+		   break;
 	  }
 
   }
@@ -840,7 +849,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		    }
 		}
 	} else { ++contaPing; }
-
+	++timerBuzzer;
 	++contaModo;
 	switch(estado){
 	case 0:
