@@ -131,6 +131,7 @@ volatile int8_t estado = ST_TESTE;
 // pois são conceitos independentes no enunciado (itens d, e, g, g.2):
 uint8_t atendendoColega = 0;   // =1 se RECEBI rqsrv e estou servindo o colega
 uint8_t a1Pressed = 0;         // =1 depois que A1 foi apertado ao menos 1x
+uint8_t ncon_forcado = 0;      // A2 mantém nCon até A1 voltar ao modo normal
 int8_t modoBotao = 0;
 int8_t testeDisplay[] = {8,8,8,8};
 /* 0x11, 0x12 e 0x13 são os glifos minúsculos o, n e r, implementados no driver
@@ -559,8 +560,8 @@ void checaBotao(void *argument) {
         uint8_t a3 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
 
         if(delay_antirrebote == 0) {
-            // só reage se a comunicação já foi validada
-            if(link_ok && a1 == GPIO_PIN_RESET && ultimo_a1 == GPIO_PIN_SET) {
+            // A1 é local e deve funcionar mesmo sem comunicação com a outra placa.
+            if(a1 == GPIO_PIN_RESET && ultimo_a1 == GPIO_PIN_SET) {
                 if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
                     if(atendendoColega) {
                         // se eu tava servindo, avisa que não vou mais
@@ -569,24 +570,28 @@ void checaBotao(void *argument) {
                         atendendoColega = 0;
                     }
                     a1Pressed = 1;
-                    // não entra no modo local se tá no erro de conexão
-                    if(estado != ST_ERRO_CONEXAO) {
-                        estado = ST_LOCAL_CRN;
-                    }
+                    ncon_forcado = 0;
+                    estado = ST_LOCAL_CRN;
                     osMutexRelease(estadoMutexHandle);
                 }
                 delay_antirrebote = DT_DEBOUNCING;
             }
 
             // A2 pede serviço pro colega
-            if(link_ok && a2 == GPIO_PIN_RESET && ultimo_a2 == GPIO_PIN_SET) {
+            if(a2 == GPIO_PIN_RESET && ultimo_a2 == GPIO_PIN_SET) {
+                if(!link_ok) {
+                    ncon_forcado = 1;
+                }
                 uint8_t mensagem = sndREQSRV;
                 (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
                 delay_antirrebote = DT_DEBOUNCING;
             }
 
             // A3 cancela o pedido de serviço
-            if(link_ok && a3 == GPIO_PIN_RESET && ultimo_a3 == GPIO_PIN_SET) {
+            if(a3 == GPIO_PIN_RESET && ultimo_a3 == GPIO_PIN_SET) {
+                if(!link_ok) {
+                    ncon_forcado = 1;
+                }
                 uint8_t mensagem = sndREQOFF;
                 (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
                 delay_antirrebote = DT_DEBOUNCING;
@@ -619,6 +624,10 @@ void mostraDisplay(void *argument) {
     uint8_t led_estado = 0;
     static uint32_t timer_5er = 0;
     static uint8_t mostrando_5er = 0;
+    uint32_t timer_tela = 0;
+    int8_t estado_anterior = -1;
+    uint32_t timer_led_ncon = 0;
+    uint8_t led_ncon = 0;
 
     for(;;) {
         if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
@@ -630,6 +639,36 @@ void mostraDisplay(void *argument) {
             estado_local = 0;
             memset(ex_crono_local, 0, sizeof(ex_crono_local));
             memset(ex_adc_local, 0, sizeof(ex_adc_local));
+        }
+
+        if(link_ok) {
+            ncon_forcado = 0;
+            timer_led_ncon = 0;
+            led_ncon = 0;
+        }
+
+        // Cada estado começa seu próprio ciclo de exibição.
+        if(estado_local != estado_anterior) {
+            estado_anterior = estado_local;
+            timer_tela = 0;
+        } else if(estado_local != ST_TESTE) {
+            timer_tela += DT_MUX_DISP;
+            if(timer_tela >= DT_DISPLAY_MD1) {
+                timer_tela = 0;
+            }
+        }
+
+        // 8888 alterna em blocos de 2 s. Nos modos locais, os 2 s finais
+        // de cada bloco de 4 s mostram nCon. A2 pode forçar nCon contínuo.
+        uint8_t mostrando_ncon = 0;
+        if(!link_ok && estado_local != ST_TESTE) {
+            mostrando_ncon = ncon_forcado;
+            if(estado_local == ST_IDLE || estado_local == ST_AGUARDA_PING ||
+               estado_local == ST_ERRO_CONEXAO) {
+                mostrando_ncon = ncon_forcado || (timer_tela >= DT_DISPLAY_NCON);
+            } else if(estado_local == ST_LOCAL_CRN || estado_local == ST_LOCAL_ADC) {
+                mostrando_ncon = ncon_forcado || (timer_tela >= DT_DISPLAY_NCON);
+            }
         }
 
         // alterna o LED pra dar aquele pulso visível
@@ -661,54 +700,63 @@ void mostraDisplay(void *argument) {
             continue;
         }
 
-        // erro de conexão: mostra nCon e trava até reset
-        if(estado_local == ST_ERRO_CONEXAO) {
-            mostrar_no_display(nCon, 0);
-            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_SET);
-            HAL_GPIO_WritePin(BUZZER_GPIO, BUZZER_PIN, GPIO_PIN_SET);
-            osDelay(DT_MUX_DISP);
-            continue;
-        }
-
         // escolhe o que aparece no display e qual LED pega o pulso
         switch(estado_local) {
             case ST_TESTE:
                 mostrar_no_display(testeDisplay, 15);
                 break;
             case ST_IDLE:
-                mostrar_no_display(testeDisplay, 15);
+            case ST_AGUARDA_PING:
+            case ST_ERRO_CONEXAO:
+                mostrar_no_display(mostrando_ncon ? nCon : testeDisplay, 15);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
             case ST_LOCAL_CRN:
-                mostrar_no_display(Crono, 10);
+                mostrar_no_display(mostrando_ncon ? nCon : Crono, mostrando_ncon ? 0 : 10);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
             case ST_LOCAL_ADC:
-                mostrar_no_display(ValAdc, 8);
+                mostrar_no_display(mostrando_ncon ? nCon : ValAdc, mostrando_ncon ? 0 : 8);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
             case ST_SERV_CRN:
-                mostrar_no_display(a1Pressed ? Crono : testeDisplay, a1Pressed ? 10 : 15);
+                mostrar_no_display(mostrando_ncon ? nCon : (a1Pressed ? Crono : testeDisplay),
+                                   mostrando_ncon ? 0 : (a1Pressed ? 10 : 15));
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
             case ST_SERV_ADC:
-                mostrar_no_display(a1Pressed ? ValAdc : testeDisplay, a1Pressed ? 8 : 15);
+                mostrar_no_display(mostrando_ncon ? nCon : (a1Pressed ? ValAdc : testeDisplay),
+                                   mostrando_ncon ? 0 : (a1Pressed ? 8 : 15));
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_13|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
             case ST_SERV_EXCRN:
-                mostrar_no_display(ex_crono_local, 10);
+                mostrar_no_display(mostrando_ncon ? nCon : ex_crono_local, mostrando_ncon ? 0 : 10);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_12, GPIO_PIN_SET);
                 break;
             case ST_SERV_EXADC:
-                mostrar_no_display(ex_adc_local, 8);
+                mostrar_no_display(mostrando_ncon ? nCon : ex_adc_local, mostrando_ncon ? 0 : 8);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, led_estado ? GPIO_PIN_RESET : GPIO_PIN_SET);
                 HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_13, GPIO_PIN_SET);
                 break;
+        }
+
+        // No nCon contínuo solicitado por A2/A3, os LEDs descem de PB15 até PB12.
+        if(ncon_forcado && !link_ok) {
+            timer_led_ncon += DT_MUX_DISP;
+            if(timer_led_ncon >= (DT_LEDS + 1)) {
+                timer_led_ncon = 0;
+                led_ncon = (led_ncon + 1) % 4;
+            }
+
+            uint16_t leds_ncon[] = {GPIO_PIN_15, GPIO_PIN_14, GPIO_PIN_13, GPIO_PIN_12};
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15|GPIO_PIN_14|GPIO_PIN_13|GPIO_PIN_12,
+                              GPIO_PIN_SET);
+            HAL_GPIO_WritePin(GPIOB, leds_ncon[led_ncon], GPIO_PIN_RESET);
         }
 
         osDelay(DT_MUX_DISP);
@@ -790,6 +838,7 @@ void UART_RX(void *argument) {
             } else if(memcmp(frame.bytes, PNGRSP, 5) == 0) {
                 ping_timeout = 0;
                 link_ok = 1;
+                ncon_forcado = 0;
                 if(osMutexAcquire(estadoMutexHandle, 100) == osOK) {
                     if(estado == ST_AGUARDA_PING) {
                         estado = ST_IDLE;
@@ -909,7 +958,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
             ++contaADC;
         }
 
-        // ping periódico: manda msg pra placa e se não responder, marca erro
+        // ping periódico: manda msg pra placa e, se não responder, apenas sinaliza
+        // a perda da conexão. A tarefa do display alterna nCon com o modo atual.
         if(estado != ST_TESTE) {
             if(++ping_timer >= DT_PING) {
                 ping_timer = 0;
@@ -917,10 +967,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
                 (void)osMessageQueuePut(fila_uart_txHandle, &mensagem, 0, 0);
 
                 if(++ping_timeout >= 5) {
-                    if(estado != ST_ERRO_CONEXAO) {
-                        estado = ST_ERRO_CONEXAO;
-                    }
+                    link_ok = 0;
                     ping_timeout = 0;
+                    if(estado == ST_AGUARDA_PING) {
+                        estado = ST_IDLE;
+                    }
                 }
             }
         }

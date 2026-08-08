@@ -105,8 +105,9 @@ void Error_Handler(void);
 #define DT_CRONO 100-1         // dt = 99 ms (== 100 e ajusta crono, reset p/ 00)
 #define DT_PING 250-1		   // DT = 250 ms -> Dispara 4 vz/s
 #define DT_Inicial 3000-1
-#define DT_DISPLAY_MD1 4000-1  // modo 1 muda display a cada 4000 ms
+#define DT_DISPLAY_MD1 4000-1  // modo local dura 4000 ms: valor 2 s + nCon 2 s
 #define DT_DISPLAY_MD2 2000-1  // modo 2 muda display a cada 2000 ms
+#define DT_DISPLAY_NCON 2000   // nCon e o valor do modo alternam a cada 2000 ms
 #define DT_LEDS 200-1          // intervalo tempo para piscar leds e buzzer
 #define DT_ERROC 80-1          // intervalo curto para indicar erro
 #define DT_ERROL 2000-1        // intervalo longo para indicar erro
@@ -140,13 +141,13 @@ typedef struct {
  * ST_TESTE       : 3s iniciais com todos os segmentos ligados (item a.3)
  * ST_AGUARDA_PING: teste concluído; aguarda o primeiro "oper!"
  * ST_IDLE        : pos-teste, PING ativo, A1 ainda não apertado -> mostra 8.8.8.8 (item c.1)
- * ST_LOCAL_CRN   : A1 já apertado, modo 2v/4s -> mostra o próprio cronômetro (item b)
- * ST_LOCAL_ADC   : A1 já apertado, modo 2v/4s -> mostra o próprio ADC (item b)
+ * ST_LOCAL_CRN   : A1 já apertado, mostra o próprio cronômetro por 2s (item b)
+ * ST_LOCAL_ADC   : A1 já apertado, mostra o próprio ADC por 2s (item b)
  * ST_SERV_CRN    : atendendo o colega (recebi rqsrv), modo 4v/2s, slot 1: próprio crono (item d)
  * ST_SERV_ADC    : modo 4v/2s, slot 2: próprio ADC (item d)
  * ST_SERV_EXCRN  : modo 4v/2s, slot 3: crono do colega (item d)
  * ST_SERV_EXADC  : modo 4v/2s, slot 4: ADC do colega (item d)
- * ST_ERRO_CONEXAO: PING sem resposta -> mostra nCon, espera reset (item a.5)
+ * ST_ERRO_CONEXAO: mantido por compatibilidade; nCon agora alterna sem travar
  * ST_ERRO_SERVICO: recebi msnos (colega parou de me servir) -> n5Er + buzzer 5s (item e.1)
  * ------------------------------------------------------------------------*/
 enum {ST_TESTE, ST_AGUARDA_PING, ST_IDLE, ST_LOCAL_CRN, ST_LOCAL_ADC,
